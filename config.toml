@@ -1,0 +1,6 @@
+[inbound]
+address = "127.0.0.1:1090"
+
+[outbound]
+address = "127.0.0.1:10809"
+uuid = ""
