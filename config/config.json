@@ -1,0 +1,36 @@
+{
+  "inbounds": [
+    {
+        "tag": "vmess",
+        "port": 1094,
+        "listen": "0.0.0.0",
+        "protocol": "vmess",
+        "settings": {
+            "clients": [
+                {
+                    "id": "96850032-1b92-46e9-a4f2-b99631456894",
+                    "security": "none"
+                }
+            ]
+        }
+
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    }
+  ],
+  "routing": {
+    "domainMatcher": "mph",
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+        {
+            "type": "field",
+            "inboundTag": ["vmess"],
+            "outboundTag": "direct"
+        }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+version: "3"
+
+services:
+  vmessy:
+    build:
+      context: .
+    volumes:
+      - ./config:/etc/config
+    network_mode: "host"
+    depends_on:
+      - xray
+
+  xray:
+    image: teddysun/xray:1.7.5
+    environment:
+      - xray.vmess.aead.forced=false
+    volumes:
+      - ./config:/etc/xray
+    network_mode: "host"

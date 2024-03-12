@@ -795,7 +795,6 @@ dependencies = [
  "cfb-mode",
  "clap",
  "const-fnv1a-hash",
- "generic-array",
  "hmac",
  "log",
  "md-5",

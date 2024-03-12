@@ -210,6 +210,8 @@ impl<W: AsyncWrite + Unpin> VmessWriter<W> {
     pub async fn write(&mut self, buf: &[u8]) -> Result<()> {
         if !self.handshaked {
             let domain = extract_host(buf)?;
+            log::info!("accepted {}", String::from_utf8_lossy(domain));
+
             self.handshake(domain).await?;
             self.handshaked = true;
         }
