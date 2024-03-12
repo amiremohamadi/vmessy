@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -15,7 +16,7 @@ pub struct Inbound {
 #[derive(Debug, Deserialize)]
 pub struct Outbound {
     pub address: String,
-    pub uuid: String,
+    pub uuid: Uuid,
 }
 
 impl Config {
