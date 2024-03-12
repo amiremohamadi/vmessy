@@ -1,33 +1,23 @@
+use crate::utils::extract_host;
+
 use std::marker::Unpin;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::io::{AsyncWrite, AsyncRead, AsyncWriteExt, AsyncReadExt, Result};
-use tokio::net::{
-    TcpStream,
-    tcp::{OwnedReadHalf, OwnedWriteHalf}
-};
-use rand::Rng;
-use hmac::{Hmac, Mac};
-use md5::{Md5, Digest};
 use aes::cipher::{AsyncStreamCipher, KeyIvInit};
 use const_fnv1a_hash::fnv1a_hash_32;
+use hmac::{Hmac, Mac};
+use md5::{Digest, Md5};
+use rand::Rng;
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Result},
+    net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpStream,
+    },
+};
 
 type Aes128CfbEnc = cfb_mode::Encryptor<aes::Aes128>;
-type Aes128CfbDec = cfb_mode::Decryptor<aes::Aes128>;
-
-
-macro_rules! md5 {
-    ( $($v:expr ),+) => {
-        {
-            let mut hash = Md5::new();
-            $(
-                hash.update($v);
-            )*
-
-            hash.finalize()
-        }
-    }
-}
+type Aes128CfbDec = cfb_mode::BufDecryptor<aes::Aes128>;
 
 #[derive(Clone, Copy)]
 pub struct Encoder {
@@ -54,8 +44,6 @@ pub struct Vmess {
 
 impl Vmess {
     pub fn new(stream: TcpStream, uuid: [u8; 16]) -> Self {
-        let encoder = Encoder::new();
-
         Self {
             uuid,
             stream: Some(stream),
@@ -85,7 +73,7 @@ pub struct VmessReader<R: AsyncRead + Unpin> {
 }
 
 impl<R: AsyncRead + Unpin> VmessReader<R> {
-    pub async fn read(&mut self, mut buf: &mut [u8]) -> Result<usize> {
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         // The header data is encrypted using AES-128-CFB encryption
         // The IV is MD5 of the data encryption IV, and the Key is MD5 of the data encryption Key
         //
@@ -97,14 +85,45 @@ impl<R: AsyncRead + Unpin> VmessReader<R> {
 
         let key = md5!(&self.encoder.key);
         let iv = md5!(&self.encoder.iv);
-        let mut buffer = [0u8; 64];
-        self.reader.read(&mut buffer).await?;
-        Aes128CfbDec::new(&key.into(), &iv.into()).decrypt(&mut buffer);
-        // Aes128CfbEnc::new(&key.into(), &iv.into()).encrypt(&mut buffer);
+        let mut decoder = Aes128CfbDec::new(&key.into(), &iv.into());
 
-        println!("data {:?}", &buffer);
+        let mut header = [0u8; 4];
+        self.reader.read_exact(&mut header).await?;
+        decoder.decrypt(&mut header); // ignore the header for now
+                                      // just decrypt it because our decoder is stateful
 
-        Ok(0)
+        // https://xtls.github.io/en/development/protocols/vmess.html#data-section
+        //
+        // +----------+-------------+
+        // | 2 Bytes  |   L Bytes   |
+        // +----------+-------------+
+        // | Length L | Data Packet |
+        // +----------+-------------+
+        //
+        // - Length L: A big-endian integer with a maximum value of 2^14
+        // - Packet: A data packet encrypted by the specified encryption method
+
+        // AES-128-CFB:
+        // The entire data section is encrypted using AES-128-CFB
+        // - 4 bytes: FNV1a hash of actual data
+        // - L - 4 bytes: actual data
+        let mut length = [0u8; 2];
+        self.reader.read_exact(&mut length).await?;
+        decoder.decrypt(&mut length);
+
+        // When Opt(M) is enabled, the value of L is equal to the true value xor Mask
+        // Mask = (RequestMask.NextByte() << 8) + RequestMask.NextByte()
+        let length = (length[0] as usize) << 8 | (length[1] as usize) - 4; // 4bytes checksum
+
+        let mut checksum = [0u8; 4];
+        self.reader.read(&mut checksum).await?;
+        decoder.decrypt(&mut checksum); // ignore the checksum for now
+                                        // just decrypt it because our decoder is stateful
+
+        self.reader.read(&mut buf[..length]).await?;
+        decoder.decrypt(&mut buf[..length]);
+
+        Ok(length)
     }
 }
 
@@ -116,7 +135,7 @@ pub struct VmessWriter<W: AsyncWrite + Unpin> {
 }
 
 impl<W: AsyncWrite + Unpin> VmessWriter<W> {
-    async fn handshake(&mut self) -> Result<()> {
+    async fn handshake(&mut self, domain: &[u8]) -> Result<()> {
         // https://xtls.github.io/en/development/protocols/vmess.html#authentication-information
         //
         // +----------------------------+
@@ -130,12 +149,13 @@ impl<W: AsyncWrite + Unpin> VmessWriter<W> {
         // M = UTC time accurate to seconds, with a random value of ±30 seconds from the current time (8 bytes, Big Endian)
         // Hash = HMAC(H, K, M)
 
-        let time = SystemTime::now().duration_since(UNIX_EPOCH)
+        let time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap() // safe to unwrap: always later than UNIX_EPOCH
-            .as_secs().to_be_bytes();
+            .as_secs()
+            .to_be_bytes();
 
-        let mut hash = Hmac::<Md5>::new_from_slice(&self.uuid)
-            .unwrap(); // safe to unwrap: always valid length
+        let mut hash = Hmac::<Md5>::new_from_slice(&self.uuid).unwrap(); // safe to unwrap: always valid length
         hash.update(&time);
 
         let auth = hash.finalize().into_bytes();
@@ -154,24 +174,23 @@ impl<W: AsyncWrite + Unpin> VmessWriter<W> {
         cmd.extend_from_slice(&self.encoder.iv); // Data Encryption IV
         cmd.extend_from_slice(&self.encoder.key); // Data Encryption Key
 
-        cmd.extend_from_slice(&[0x00]); // Response Authentication Value
+        cmd.extend_from_slice(&[
+            0x00, // Response Authentication Value
+            0x01, // Option S(0x01): Standard format data stream (recommended)
+            0x00, // 4bits Reserved + Encryption Method (0x00 AES-128-CFB)
+            0x00, // 1byte Reserved
+            0x01, // Command: 0x01 TCP
+        ]);
 
-        cmd.extend_from_slice(&[0x01]); // Option S(0x01): Standard format data stream (recommended)
-        cmd.extend_from_slice(&[0x00]); // 4bits Reserved + Encryption Method (0x00 AES-128-CFB)
-        cmd.extend_from_slice(&[0x00]); // 1byte Reserved
-
-        cmd.extend_from_slice(&[0x01]); // Command: 0x01 TCP
-
+        // TODO: extract port from request. for now we use 80 for all requests
         cmd.extend_from_slice(&(80u16).to_be_bytes()); // Port
 
-        // cmd.extend_from_slice(&[0x02]); // Address Type: Domain name
-        // let domain = "google.com";
-        // let mut address = vec![domain.len() as _];
-        // address.extend_from_slice(domain.as_bytes());
-        // cmd.extend_from_slice(&address); // Address
+        // TODO: support ipv4/ipv6. for now we just support domain name
+        cmd.extend_from_slice(&[0x02]); // Address Type: Domain name
 
-        cmd.extend_from_slice(&[0x01]);
-        cmd.extend_from_slice(&[216, 239, 38, 120]);
+        let mut address = vec![domain.len() as _];
+        address.extend_from_slice(domain);
+        cmd.extend_from_slice(&address);
 
         // P bytes random value -> assume p = 0, so we don't push data for it
 
@@ -188,10 +207,10 @@ impl<W: AsyncWrite + Unpin> VmessWriter<W> {
         self.writer.write_all(&cmd).await
     }
 
-
     pub async fn write(&mut self, buf: &[u8]) -> Result<()> {
         if !self.handshaked {
-            self.handshake().await?;
+            let domain = extract_host(buf)?;
+            self.handshake(domain).await?;
             self.handshaked = true;
         }
 
@@ -220,9 +239,8 @@ impl<W: AsyncWrite + Unpin> VmessWriter<W> {
             vmess_buf.extend_from_slice(buf);
         }
 
-        Aes128CfbEnc::new(
-            &self.encoder.key.into(),
-            &self.encoder.iv.into()).encrypt(&mut vmess_buf);
+        Aes128CfbEnc::new(&self.encoder.key.into(), &self.encoder.iv.into())
+            .encrypt(&mut vmess_buf);
 
         self.writer.write_all(&vmess_buf).await
     }
@@ -231,39 +249,65 @@ impl<W: AsyncWrite + Unpin> VmessWriter<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::Error;
     use std::pin::Pin;
     use std::task::{Context, Poll};
+    use tokio::io::Result;
 
-    struct MockWriter { written: Vec<u8> }
+    struct MockWriter {
+        written: Vec<u8>,
+    }
 
     impl AsyncWrite for MockWriter {
         fn poll_write(
             mut self: Pin<&mut Self>,
             _: &mut Context<'_>,
-            buf: &[u8]
-        ) -> Poll<Result<usize, Error>> {
+            buf: &[u8],
+        ) -> Poll<Result<usize>> {
             self.written.extend_from_slice(buf);
             Poll::Ready(Ok(buf.len()))
         }
 
-        fn poll_flush(
-            self: Pin<&mut Self>,
-            _: &mut Context<'_>
-        ) -> Poll<Result<(), Error>> { todo!() }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<()>> {
+            todo!()
+        }
 
-        fn poll_shutdown(
-            self: Pin<&mut Self>,
-            _: &mut Context<'_>
-        ) -> Poll<Result<(), Error>> { todo!() }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<()>> {
+            todo!()
+        }
     }
 
     #[tokio::test]
     async fn test_vmess_write() {
-        let mut w = MockWriter { written: vec![] };
+        let w = MockWriter { written: vec![] };
 
-        let _ = write(&mut w, &[1, 2]).await;
-        assert_eq!(w.written, vec![1, 2]);
+        let uuid = [0; 16];
+        let encoder = Encoder::new();
+        let mut vwriter = VmessWriter {
+            writer: w,
+            handshaked: false,
+            uuid,
+            encoder,
+        };
 
+        let buf = b"GET http://google.com/ HTTP/1.1\r\nHost: google.com\r\nUser-Agent: curl/7.85.0";
+        let _ = vwriter.write(buf).await;
+
+        assert_eq!(vwriter.handshaked, true);
+
+        let header_length = 72;
+        let data = vwriter.writer.written.as_mut_slice();
+        Aes128CfbDec::new(&encoder.key.into(), &encoder.iv.into())
+            .decrypt(&mut data[header_length..]);
+
+        let payload = &data[header_length..];
+
+        let payload_length = u16::from_be_bytes([payload[0], payload[1]]);
+        assert_eq!(payload_length, 78);
+
+        let checksum = fnv1a_hash_32(buf, None);
+        assert_eq!(checksum.to_be_bytes(), payload[2..6]);
+
+        // actual data
+        assert_eq!(&payload[6..], buf);
     }
 }

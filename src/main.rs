@@ -1,8 +1,4 @@
-mod config;
-mod proxy;
-mod vmess;
-
-use crate::config::Config;
+use vmessy::{config::Config, proxy};
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
