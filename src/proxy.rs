@@ -13,7 +13,11 @@ pub async fn run(config: &Config) -> io::Result<()> {
         let (conn, _) = listener.accept().await?;
 
         let upstream = TcpStream::connect(&config.outbound.address).await?;
-        let vmess = Vmess::new(upstream, *config.outbound.uuid.as_bytes());
+        let vmess = Vmess::new(
+            upstream,
+            *config.outbound.uuid.as_bytes(),
+            config.outbound.aead,
+        );
 
         let (mut reader, mut writer) = conn.into_split();
         let (mut ureader, mut uwriter) = vmess.into_split();

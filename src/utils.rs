@@ -1,5 +1,8 @@
 use tokio::io::{Error, ErrorKind, Result};
 
+pub type Aes128CfbEnc = cfb_mode::Encryptor<aes::Aes128>;
+pub type Aes128CfbDec = cfb_mode::BufDecryptor<aes::Aes128>;
+
 #[macro_export]
 macro_rules! copy {
     ($r:ident, $w:ident) => {
@@ -23,14 +26,25 @@ macro_rules! copy {
     };
 }
 
+macro_rules! sha256 {
+    ( $($v:expr),+ ) => {
+        {
+            let mut hash = Sha256::new();
+            $(
+                hash.update($v);
+            )*
+            hash.finalize()
+        }
+    }
+}
+
 macro_rules! md5 {
-    ( $($v:expr ),+) => {
+    ( $($v:expr),+ ) => {
         {
             let mut hash = Md5::new();
             $(
                 hash.update($v);
             )*
-
             hash.finalize()
         }
     }

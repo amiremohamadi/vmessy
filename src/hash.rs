@@ -16,9 +16,7 @@ impl Sha256Hash {
 
 impl Hasher for Sha256Hash {
     fn clone(&self) -> Box<dyn Hasher> {
-        Box::new(
-            Self(self.0.clone())
-        )
+        Box::new(Self(self.0.clone()))
     }
 
     fn update(&mut self, data: &[u8]) {
@@ -73,14 +71,12 @@ impl Hasher for RecursiveHash {
         let ipad = self.ipad.clone();
         let opad = self.opad.clone();
 
-        Box::new(
-            Self {
-                inner,
-                outer,
-                ipad,
-                opad,
-            }
-        )
+        Box::new(Self {
+            inner,
+            outer,
+            ipad,
+            opad,
+        })
     }
 
     fn update(&mut self, data: &[u8]) {
@@ -93,7 +89,6 @@ impl Hasher for RecursiveHash {
         self.outer.update(&result);
         self.outer.finalize().into()
     }
-
 }
 
 pub fn kdf(key: &[u8], path: &[&[u8]]) -> [u8; 32] {
@@ -103,15 +98,14 @@ pub fn kdf(key: &[u8], path: &[&[u8]]) -> [u8; 32] {
     ));
 
     for p in path.into_iter() {
-        current = Box::new(
-            RecursiveHash::new(p, current),
-        );
+        current = Box::new(RecursiveHash::new(p, current));
     }
 
     current.update(key);
     current.finalize()
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use md5::Md5;
@@ -123,6 +117,9 @@ mod tests {
 
         let res = kdf(&key, &[b"AES Auth ID Encryption"]);
 
-        assert_eq!(res[..16], [117, 82, 144, 159, 147, 65, 74, 253, 91, 74, 70, 84, 114, 118, 203, 30]);
+        assert_eq!(
+            res[..16],
+            [117, 82, 144, 159, 147, 65, 74, 253, 91, 74, 70, 84, 114, 118, 203, 30]
+        );
     }
 }

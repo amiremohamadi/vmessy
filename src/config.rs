@@ -17,6 +17,7 @@ pub struct Inbound {
 pub struct Outbound {
     pub address: String,
     pub uuid: Uuid,
+    pub aead: bool,
 }
 
 impl Config {
