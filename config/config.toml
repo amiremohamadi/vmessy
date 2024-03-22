@@ -4,3 +4,4 @@ address = "0.0.0.0:1090"
 [outbound]
 address = "127.0.0.1:1094"
 uuid = "96850032-1b92-46e9-a4f2-b99631456894"
+aead = true
