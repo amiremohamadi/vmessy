@@ -7,7 +7,12 @@ $ xray --config ./config/config.json
 $ cargo run -- --config ./config/config.toml
 ```
 
-in newer versions of `xray`, you might need to disable aead:
+run xray:
+```bash
+$ xray --config ./config/config.json
+```
+
+if you set `aead = false` in [`config.toml`](./config/config.toml) you might need to disable aead:
 ```bash
 $ env "xray.vmess.aead.forced=false" xray --config ./config/config.json
 ```
