@@ -58,18 +58,19 @@ pub(crate) struct Addr<'a> {
 
 impl<'a> fmt::Debug for Addr<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut addr = vec![];
+        let mut addr = String::new();
 
         if let Some(host) = self.host {
-            addr.extend_from_slice(host);
+            let host = String::from_utf8_lossy(host);
+            addr.push_str(&host);
         }
 
         if let Some(port) = self.port {
-            addr.extend_from_slice(b":");
-            addr.extend_from_slice(&port.to_string().as_bytes());
+            let port = format!(":{}", port);
+            addr.push_str(&port);
         }
 
-        write!(f, "{:?}", addr)
+        write!(f, "{}", addr)
     }
 }
 
