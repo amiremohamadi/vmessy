@@ -1,4 +1,4 @@
-use crate::utils::{extract_host, Aes128CfbDec, Aes128CfbEnc};
+use crate::utils::{extract_addr, Addr, Aes128CfbDec, Aes128CfbEnc};
 
 use std::marker::Unpin;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -175,7 +175,7 @@ pub struct VmessWriter<W: AsyncWrite + Unpin> {
 }
 
 impl<W: AsyncWrite + Unpin> VmessWriter<W> {
-    async fn handshake(&mut self, domain: &[u8]) -> Result<()> {
+    async fn handshake<'a>(&mut self, addr: Addr<'a>) -> Result<()> {
         // https://xtls.github.io/en/development/protocols/vmess.html#authentication-information
         //
         // +----------------------------+
@@ -229,13 +229,13 @@ impl<W: AsyncWrite + Unpin> VmessWriter<W> {
         ]);
 
         // TODO: extract port from request. for now we use 80 for all requests
-        cmd.extend_from_slice(&(80u16).to_be_bytes()); // Port
+        cmd.extend_from_slice(&addr.port().to_be_bytes()); // Port
 
         // TODO: support ipv4/ipv6. for now we just support domain name
         cmd.extend_from_slice(&[0x02]); // Address Type: Domain name
 
-        let mut address = vec![domain.len() as _];
-        address.extend_from_slice(domain);
+        let mut address = vec![addr.host().len() as _];
+        address.extend_from_slice(addr.host());
         cmd.extend_from_slice(&address);
 
         // P bytes random value -> assume p = 0, so we don't push data for it
@@ -298,10 +298,10 @@ impl<W: AsyncWrite + Unpin> VmessWriter<W> {
 
     pub async fn write(&mut self, buf: &[u8]) -> Result<()> {
         if !self.handshaked {
-            let domain = extract_host(buf)?;
-            log::info!("accepted {}", String::from_utf8_lossy(domain));
+            let addr = extract_addr(buf)?;
+            log::info!("accepted {:?}", addr);
 
-            self.handshake(domain).await?;
+            self.handshake(addr).await?;
             self.handshaked = true;
         }
 
